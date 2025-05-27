@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VisionAid</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #6b73ff 0%, #000dff 100%);
+      color: #fff;
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .container {
+      background: #1a1a2e;
+      width: 90%; max-width: 480px;
+      padding: 30px 25px 40px;
+      border-radius: 15px;
+      box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+      text-align: center;
+    }
+    h1 {
+      margin-bottom: 20px;
+      font-weight: 700;
+      font-size: 2.2rem;
+      letter-spacing: 1.5px;
+    }
+    video {
+      width: 100%;
+      border-radius: 12px;
+      border: 3px solid #4e5dfd;
+      box-shadow: 0 6px 12px rgba(78,93,253,0.6);
+      margin-bottom: 25px;
+    }
+    #caption {
+      font-size: 1.2rem;
+      font-weight: 600;
+      color: #c1c1ff;
+      min-height: 60px;
+      padding: 12px 18px;
+      background: #292d52;
+      border-radius: 12px;
+      box-shadow: inset 0 0 8px #4e5dfd;
+      word-wrap: break-word;
+      white-space: pre-wrap;
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .buttons {
+      display: flex;
+      justify-content: center;
+    }
+    button {
+      background: #4e5dfd;
+      border: none;
+      padding: 10px 25px;
+      color: white;
+      font-size: 1rem;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+      user-select: none;
+    }
+    button:hover {
+      background: #6673ff;
+    }
+    @media (max-width: 480px) {
+      .container {
+        padding: 20px 15px 30px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>VisionAid</h1>
+    <video id="camera-stream" autoplay muted playsinline></video>
+    <p id="caption">Say "capture" to take a picture and get a description.</p>
+    <div class="buttons">
+      <button id="captureBtn">Capture</button>
+    </div>
+  </div>
+  <script>
+    const video = document.getElementById('camera-stream');
+    const captionText = document.getElementById('caption');
+    const captureBtn = document.getElementById('captureBtn');
+
+    const canvas = document.createElement('canvas');
+    let recognition;
+    let isSpeaking = false;
+    let isRecognizing = false;
+
+    function speakText(text, onEnd) {
+      if (!('speechSynthesis' in window)) {
+        if (onEnd) onEnd();
+        return;
+      }
+      window.speechSynthesis.cancel();
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.lang = 'en-US';
+      utt.onstart = () => {
+        isSpeaking = true;
+        stopRecognition();
+      };
+      utt.onend = () => {
+        isSpeaking = false;
+        if (onEnd) onEnd();
+        startRecognition();
+      };
+      window.speechSynthesis.speak(utt);
+    }
+
+    function startRecognition() {
+      if (isRecognizing || isSpeaking || !recognition) return;
+      recognition.start();
+      isRecognizing = true;
+    }
+
+    function stopRecognition() {
+      if (recognition && isRecognizing) {
+        recognition.stop();
+        isRecognizing = false;
+      }
+    }
+
+    function captureAndSend() {
+      speakText("Capturing image, please wait.");
+      captionText.textContent = "Generating caption...";
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      canvas.toBlob(blob => {
+        const fd = new FormData();
+        fd.append('image', blob, 'capture.png');
+        fetch('/caption', { method: 'POST', body: fd })
+          .then(r => r.json())
+          .then(data => {
+            const cap = data.caption || "No caption returned.";
+            captionText.textContent = cap;
+            speakText(cap + ". Say 'capture' to take another picture.");
+          })
+          .catch(err => {
+            console.error(err);
+            captionText.textContent = "Failed to get caption.";
+            speakText("Failed to get caption.");
+          });
+      }, 'image/png');
+    }
+
+    function setupRecognition() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) {
+        captionText.textContent = "Speech recognition not supported.";
+        return;
+      }
+      recognition = new SR();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+      recognition.onstart = () => isRecognizing = true;
+      recognition.onend = () => {
+        isRecognizing = false;
+        if (!isSpeaking) setTimeout(() => recognition.start(), 500);
+      };
+      recognition.onerror = e => {
+        console.error(e.error);
+        if (!isSpeaking) setTimeout(() => recognition.start(), 2000);
+      };
+      recognition.onresult = e => {
+        const cmd = e.results[e.results.length - 1][0].transcript.trim().toLowerCase();
+        console.log('Heard:', cmd);
+        if (isSpeaking) return;
+        if (cmd.includes('capture')) {
+          stopRecognition();
+          captureAndSend();
+        }
+      };
+    }
+
+    captureBtn.onclick = () => {
+      stopRecognition();
+      captureAndSend();
+    };
+
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(stream => {
+        video.srcObject = stream;
+        speakText(
+          'Say "capture" to take a picture and get a description.',
+          () => {
+            setupRecognition();
+            startRecognition();
+          }
+        );
+      })
+      .catch(e => {
+        console.error(e);
+        captionText.textContent = "Camera not accessible.";
+      });
+  </script>
+</body>
+</html>
